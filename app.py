@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# FINAL VERSION v3.3 - Maximum Resilience and Clarity
+# FINAL VERSION v4.0 - Simplified for Reliability (Firebase Removed)
 
 import io
 import re
@@ -15,9 +15,6 @@ from Bio.SeqUtils import MeltingTemp as mt
 from Bio.SeqUtils import gc_fraction
 import requests
 from bs4 import BeautifulSoup
-import firebase_admin
-from firebase_admin import credentials, firestore
-from google.api_core.exceptions import NotFound
 
 # ---------------- Page & styles ----------------
 st.set_page_config(page_title="محاكاة PCR", layout="wide")
@@ -28,61 +25,18 @@ html, body, [class*="css"] { direction: rtl; font-family: "Noto Naskh Arabic","T
 .header h1 { margin:0 0 6px 0; font-size:1.6rem; }
 .intro-box { background-color: #f8f9fa; border-radius: 10px; padding: 15px; margin-bottom: 15px; border: 1px solid #dee2e6; }
 .small { font-size:.9rem; color:#475569;}
-.visitor-count { font-size: 0.9rem; color: #64748b; text-align: left; padding-left: 5px; }
 .badges span { display:inline-block; margin:4px 6px 0 0; padding:6px 10px; border-radius:999px; border:1px solid #e3e8ef; background:#fff; font-size:.9rem; }
 code { direction: ltr; text-align: left; display: block; white-space: pre; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Firebase Firestore Initialization (Cached & Robust) ---
-@st.cache_resource
-def init_firebase_connection():
-    try:
-        firebase_creds = dict(st.secrets["firebase"])
-        cred = credentials.Certificate(firebase_creds)
-        firebase_admin.initialize_app(cred)
-        return firestore.client()
-    except Exception:
-        # Silently fail but log to console if possible
-        print("Could not initialize Firebase. Check secrets.")
-        return None
-
-def get_visitor_count(_db):
-    if _db is None: return "غير متاح" # "Unavailable"
-    doc_ref = _db.collection('app_stats').document('visitors')
-    try:
-        doc = doc_ref.get()
-        if doc.exists:
-            new_count = doc.to_dict().get('count', 0) + 1
-            doc_ref.set({'count': new_count})
-            return new_count
-        else:
-            doc_ref.set({'count': 1}); return 1
-    except NotFound:
-        st.warning("تم تهيئة Firebase بنجاح، ولكن لم يتم العثور على قاعدة بيانات Firestore. يرجى إنشائها.", icon="🔥")
-        # English: "Firebase initialized, but Firestore database not found. Please create it."
-        return "يحتاج إعداد" # "Needs Setup"
-    except Exception:
-        return "خطأ" # "Error"
-
-db_connection = init_firebase_connection()
-if 'visitor_count' not in st.session_state:
-    st.session_state.visitor_count = get_visitor_count(db_connection)
-
 # --- Main Header ---
-st.markdown(f"""
+st.markdown("""
 <div class="header">
-  <div style="display: flex; justify-content: space-between; align-items: start;">
-    <div>
-      <h1>محاكاة PCR — بحث سريع عبر الويب + جيل افتراضي</h1>
-      <div class="small">
-        صُمِّم بواسطة <b>Mahmood Al-Mualm</b> — <b>محمود أحمد محي المعلّم</b> ·
-        البريد: <a href="mailto:mahmoodalmoalm@gmail.com">mahmoodalmoalm@gmail.com</a>
-      </div>
-    </div>
-    <div class="visitor-count">
-      الزوار: {st.session_state.get('visitor_count', '...')}<br/>
-    </div>
+  <h1>محاكاة PCR — بحث سريع عبر الويب + جيل افتراضي</h1>
+  <div class="small">
+    صُمِّم بواسطة <b>Mahmood Al-Mualm</b> — <b>محمود أحمد محي المعلّم</b> ·
+    البريد: <a href="mailto:mahmoodalmoalm@gmail.com">mahmoodalmoalm@gmail.com</a>
   </div>
   <div class="badges"><span>Web In-silico PCR</span><span>In-silico Gel</span><span>واجهة عربية</span></div>
 </div>
@@ -104,7 +58,7 @@ http_session = requests.Session()
 
 def _clean(seq: str) -> str: return re.sub(r"[^ACGTNacgtn]", "", (seq or "")).upper()
 
-@st.cache_data(ttl=6*60*60, show_spinner=False) # Cache for 6 hours
+@st.cache_data(ttl=6*60*60, show_spinner=True, RerunData)
 def _http_get_cached(url: str, params: Dict, timeout: int) -> requests.Response:
     if not API_KEY: st.error("ScrapingBee API Key not found in secrets."); st.stop()
     proxy_url = 'https://app.scrapingbee.com/api/v1/'
@@ -113,9 +67,11 @@ def _http_get_cached(url: str, params: Dict, timeout: int) -> requests.Response:
     r = http_session.get(proxy_url, params=proxy_params, timeout=timeout)
     r.raise_for_status()
     return r
+
 def calculate_primer_properties(primer_sequence: str) -> Dict:
     if not primer_sequence: return {"Length": 0, "GC%": 0.0, "Tm (°C)": 0.0}
     return {"Length": len(primer_sequence), "GC%": round(gc_fraction(primer_sequence) * 100, 2), "Tm (°C)": round(mt.Tm_NN(primer_sequence), 2)}
+
 def run_pcr_search(fwd: str, rev: str, org: str, db: str, max_bp: int) -> List[Dict]:
     all_hits = []
     try:
@@ -128,18 +84,17 @@ def run_pcr_search(fwd: str, rev: str, org: str, db: str, max_bp: int) -> List[D
                     if prod := _coerce_item(item): all_hits.append(prod)
     except Exception as e:
         st.warning(f"واجهة API لم تنجح، جاري تجربة المرايا... ({e})", icon="🌐")
-        # English: "API failed, trying mirrors..."
     if not all_hits:
         try:
             params = {"org": org, "db": db, "wp_f": fwd, "wp_r": rev, "wp_size": int(max_bp), "Submit": "submit"}
-            r = _http_get_cached(UCSC_HTML[0], params, 60) # Try first mirror
+            r = _http_get_cached(UCSC_HTML[0], params, 60)
             soup = BeautifulSoup(r.text, "lxml")
             pre_txt = "\n".join(p.get_text("\n") for p in soup.find_all("pre")) or r.text
             all_hits.extend(parse_fasta_products(pre_txt) or parse_html_products(pre_txt))
         except Exception as e:
             st.error(f"فشل جلب البيانات من كل المصادر. قد يكون الخادم الخارجي محظورًا مؤقتًا. ({e})")
-            # English: "Failed to fetch data from all sources. The external server may be temporarily blocked."
     return all_hits
+
 def _coerce_item(item):
     if isinstance(item, list) and item and isinstance(item[0], dict): item = item[0]
     if not isinstance(item, dict): return {}
@@ -149,6 +104,7 @@ def _coerce_item(item):
     if chrom and start and end:
         return {"chrom": chrom, "start": int(start), "end": int(end), "size": abs(int(end) - int(start)) + 1, "strand": item.get("strand", "+"), "sequence": item.get("sequence", "").replace("\r","")}
     return {}
+
 def parse_fasta_products(text: str) -> List[Dict]:
     products = []
     for blk in re.split(r"(?m)^>", text):
@@ -159,6 +115,7 @@ def parse_fasta_products(text: str) -> List[Dict]:
         seq = "".join(s.strip() for s in seq_lines if re.fullmatch(r"[ACGTNacgtn]+", s.strip()))
         products.append({"chrom": chrom, "start": start, "end": end, "size": abs(end-start)+1, "strand": strand, "sequence": seq.upper()})
     return products
+
 def parse_html_products(text: str) -> List[Dict]:
     products = []
     for line in text.splitlines():
@@ -166,6 +123,7 @@ def parse_html_products(text: str) -> List[Dict]:
         chrom, start, end, strand = m.group(1), int(m.group(2)), int(m.group(3)), (m.group(4) if m.group(4) in ["+","-"] else "+")
         products.append({"chrom": chrom, "start": start, "end": end, "size": abs(end-start)+1, "strand": strand, "sequence": ""})
     return products
+
 def _gel_y(bp, a=100.0, b=50.0): return a - b * math.log10(max(bp, 1))
 def render_gel(sizes: List[int]) -> io.BytesIO:
     lad100, lad1k = list(range(100, 1600, 100)), [250,500,750,1000,1500,2000,3000,4000,5000,6000,8000,10000]
