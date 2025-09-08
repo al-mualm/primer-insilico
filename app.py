@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# FINAL VERSION v4.0 - Simplified for Reliability (Firebase Removed)
+# FINAL VERSION v4.1 - Corrected Syntax Error
 
 import io
 import re
@@ -58,7 +58,8 @@ http_session = requests.Session()
 
 def _clean(seq: str) -> str: return re.sub(r"[^ACGTNacgtn]", "", (seq or "")).upper()
 
-@st.cache_data(ttl=6*60*60, show_spinner=True, RerunData)
+# --- THIS IS THE CORRECTED LINE ---
+@st.cache_data(ttl=6*60*60, show_spinner=True)
 def _http_get_cached(url: str, params: Dict, timeout: int) -> requests.Response:
     if not API_KEY: st.error("ScrapingBee API Key not found in secrets."); st.stop()
     proxy_url = 'https://app.scrapingbee.com/api/v1/'
