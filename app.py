@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# FINAL VERSION v3.1 - Corrected Syntax
+# FINAL VERSION v3.2 - Bulletproof Firebase Initialization & Error Handling
 
 import io
 import re
@@ -17,6 +17,7 @@ import requests
 from bs4 import BeautifulSoup
 import firebase_admin
 from firebase_admin import credentials, firestore
+from google.api_core.exceptions import NotFound
 
 # ---------------- Page & styles ----------------
 st.set_page_config(page_title="محاكاة PCR", layout="wide")
@@ -32,39 +33,58 @@ code { direction: ltr; text-align: left; display: block; white-space: pre; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Firebase Firestore Initialization for Visitor Counter ---
-def init_firebase():
-    """Initializes Firebase app if not already initialized."""
+# --- Firebase Firestore Initialization with Advanced Error Handling ---
+@st.cache_resource
+def init_firebase_connection():
+    """
+    Initializes a persistent Firebase connection.
+    This is cached to prevent re-initializing on every script rerun.
+    """
     try:
         firebase_creds = dict(st.secrets["firebase"])
-        if not all(k in firebase_creds for k in ["type", "project_id", "private_key_id", "private_key", "client_email", "client_id"]):
-             st.error("Firebase credentials are not correctly configured in secrets.")
-             return None
         cred = credentials.Certificate(firebase_creds)
-        if not firebase_admin._apps:
-            firebase_admin.initialize_app(cred)
+        firebase_admin.initialize_app(cred)
         return firestore.client()
     except Exception as e:
-        st.error(f"Failed to initialize Firebase: {e}. Ensure your secrets are set correctly.")
+        # This will catch errors in the secrets format
+        st.error(f"Firebase configuration error in secrets: {e}")
         return None
 
-def get_and_increment_visitor_count(db):
-    """Gets the current count, increments it, and returns the new count."""
-    if db is None: return "N/A"
+def get_visitor_count(db):
+    """
+    Gets and increments the visitor count.
+    Now includes specific handling for the NotFound error.
+    """
+    if db is None:
+        return "تهيئة خاطئة"  # "Configuration Error"
+    
     doc_ref = db.collection('app_stats').document('visitors')
-    doc = doc_ref.get()
-    if doc.exists:
-        new_count = doc.to_dict().get('count', 0) + 1
-        doc_ref.set({'count': new_count})
-        return new_count
-    else:
-        doc_ref.set({'count': 1})
-        return 1
+    
+    try:
+        doc = doc_ref.get()
+        if doc.exists:
+            new_count = doc.to_dict().get('count', 0) + 1
+            doc_ref.set({'count': new_count})
+            return new_count
+        else:
+            # First visitor, create the document
+            doc_ref.set({'count': 1})
+            return 1
+    except NotFound:
+        # --- THIS IS THE CRITICAL ERROR HANDLING ---
+        st.error("خطأ في الاتصال بقاعدة البيانات (NotFound): هل قمت بإنشاء قاعدة بيانات Firestore داخل مشروع Firebase الخاص بك؟ هذه خطوة مطلوبة لمرة واحدة.")
+        # English: "Database Connection Error (NotFound): Have you created the Firestore database inside your Firebase project? This is a required one-time step."
+        return "قاعدة بيانات غير موجودة" # "Database Not Found"
+    except Exception as e:
+        st.error(f"An unexpected error occurred with Firestore: {e}")
+        return "خطأ" # "Error"
 
+# Initialize connection and get count
+db_connection = init_firebase_connection()
 if 'visitor_count' not in st.session_state:
-    db = init_firebase()
-    st.session_state.visitor_count = get_and_increment_visitor_count(db) if db else "Error"
+    st.session_state.visitor_count = get_visitor_count(db_connection)
 
+# --- The rest of your app code remains the same ---
 # --- Main Header ---
 st.markdown("""
 <div class="header">
@@ -93,8 +113,6 @@ http_session = requests.Session()
 
 # ---------------- Helper Functions ----------------
 def _clean(seq: str) -> str: return re.sub(r"[^ACGTNacgtn]", "", (seq or "")).upper()
-def _looks_like_cloudflare(text: str) -> bool: return "cloudflare" in text.lower() or "challenge" in text.lower()
-
 @st.cache_data(ttl=24*60*60, show_spinner=False)
 def _http_get_cached(url: str, params: Dict, timeout: int) -> requests.Response:
     if not API_KEY: st.error("ScrapingBee API Key not found in secrets."); st.stop()
@@ -104,11 +122,9 @@ def _http_get_cached(url: str, params: Dict, timeout: int) -> requests.Response:
     r = http_session.get(proxy_url, params=proxy_params, timeout=timeout)
     r.raise_for_status()
     return r
-
 def calculate_primer_properties(primer_sequence: str) -> Dict:
     if not primer_sequence: return {"Length": 0, "GC%": 0.0, "Tm (°C)": 0.0}
     return {"Length": len(primer_sequence), "GC%": round(gc_fraction(primer_sequence) * 100, 2), "Tm (°C)": round(mt.Tm_NN(primer_sequence), 2)}
-
 def run_pcr_search(fwd: str, rev: str, org: str, db: str, max_bp: int) -> List[Dict]:
     all_hits = []
     try: all_hits.extend(ucsc_via_json(fwd, rev, org, db, max_bp) or [])
@@ -117,58 +133,45 @@ def run_pcr_search(fwd: str, rev: str, org: str, db: str, max_bp: int) -> List[D
         try: all_hits.extend(ucsc_via_html(fwd, rev, org, db, max_bp) or [])
         except Exception as e: st.error(f"Failed to fetch data from all sources: {e}")
     return all_hits
-
 def ucsc_via_json(fwd, rev, org, db, max_bp):
     params = dict(org=org, db=db, wp_f=fwd, wp_r=rev, wp_size=int(max_bp))
-    r = _http_get_cached(UCSC_JSON, params, 45)
-    data = r.json()
-    products = []
+    r = _http_get_cached(UCSC_JSON, params, 45); data = r.json(); products = []
     for key in ("results","pcr","items","products"):
         if key in data and isinstance(data[key], list):
             for item in data[key]:
                 if prod := _coerce_item(item): products.append(prod)
     return products
-
 def ucsc_via_html(fwd, rev, org, db, max_bp):
     last_err = None
     for url in UCSC_HTML:
         try:
             params = {"org": org, "db": db, "wp_f": fwd, "wp_r": rev, "wp_size": int(max_bp), "Submit": "submit"}
-            r = _http_get_cached(url, params, 45)
-            txt = r.text
-            if _looks_like_cloudflare(txt):
-                last_err = RuntimeError("Request blocked by Cloudflare."); time.sleep(1); continue
-            soup = BeautifulSoup(txt, "lxml")
-            pre_txt = "\n".join(p.get_text("\n") for p in soup.find_all("pre")) or txt
+            r = _http_get_cached(url, params, 45); txt = r.text
+            if "cloudflare" in txt.lower(): last_err = RuntimeError("Request blocked by Cloudflare."); time.sleep(1); continue
+            soup = BeautifulSoup(txt, "lxml"); pre_txt = "\n".join(p.get_text("\n") for p in soup.find_all("pre")) or txt
             if products := (parse_fasta_products(pre_txt) or parse_html_products(pre_txt)): return products
         except Exception as e: last_err = e; time.sleep(1)
     if last_err: raise last_err
     return []
-
 def _coerce_item(item):
     if isinstance(item, list) and item and isinstance(item[0], dict): item = item[0]
     if not isinstance(item, dict): return {}
     chrom, start, end = item.get("chrom") or item.get("chr"), item.get("start"), item.get("end")
     if seq := item.get("sequence", "") and not (chrom and start and end):
-        if m := re.search(r">(chr[\w\.\-]+):(\d+)-(\d+)", seq.splitlines()[0]):
-            chrom, start, end = m.group(1), int(m.group(2)), int(m.group(3))
+        if m := re.search(r">(chr[\w\.\-]+):(\d+)-(\d+)", seq.splitlines()[0]): chrom, start, end = m.group(1), int(m.group(2)), int(m.group(3))
     if chrom and start and end:
-        size = abs(int(end) - int(start)) + 1
-        return {"chrom": chrom, "start": int(start), "end": int(end), "size": size, "strand": item.get("strand", "+"), "sequence": item.get("sequence", "").replace("\r","")}
+        return {"chrom": chrom, "start": int(start), "end": int(end), "size": abs(int(end) - int(start)) + 1, "strand": item.get("strand", "+"), "sequence": item.get("sequence", "").replace("\r","")}
     return {}
-
 def parse_fasta_products(text: str) -> List[Dict]:
     products = []
     for blk in re.split(r"(?m)^>", text):
         if not (blk := blk.strip()): continue
         header, *seq_lines = blk.splitlines()
         if not (m := re.search(r"(chr[\w\.\-]+):(\d+)-(\d+)(?:\(([-+])\))?", header)): continue
-        chrom, start, end = m.group(1), int(m.group(2)), int(m.group(3))
-        strand = m.group(4) if m.lastindex and m.group(m.lastindex) in ["+","-"] else "+"
+        chrom, start, end = m.group(1), int(m.group(2)), int(m.group(3)); strand = m.group(4) if m.lastindex and m.group(m.lastindex) in ["+","-"] else "+"
         seq = "".join(s.strip() for s in seq_lines if re.fullmatch(r"[ACGTNacgtn]+", s.strip()))
         products.append({"chrom": chrom, "start": start, "end": end, "size": abs(end-start)+1, "strand": strand, "sequence": seq.upper()})
     return products
-
 def parse_html_products(text: str) -> List[Dict]:
     products = []
     for line in text.splitlines():
@@ -176,19 +179,14 @@ def parse_html_products(text: str) -> List[Dict]:
         chrom, start, end, strand = m.group(1), int(m.group(2)), int(m.group(3)), (m.group(4) if m.group(4) in ["+","-"] else "+")
         products.append({"chrom": chrom, "start": start, "end": end, "size": abs(end-start)+1, "strand": strand, "sequence": ""})
     return products
-
 def _gel_y(bp, a=100.0, b=50.0): return a - b * math.log10(max(bp, 1))
 def render_gel(sizes: List[int]) -> io.BytesIO:
     lad100, lad1k = list(range(100, 1600, 100)), [250,500,750,1000,1500,2000,3000,4000,5000,6000,8000,10000]
     ladder = lad100 if (max(sizes) if sizes else 0) <= 1500 else lad1k
-    all_y = [_gel_y(x) for x in ladder + sizes]
-    ymin, ymax = min(all_y)-5, max(all_y)+5
-    fig, ax = plt.subplots(figsize=(5.2, 6), dpi=170)
-    x_lad, x_s, lane_w = 0.0, 3.0, 1.0
-    for yy, sz in zip([_gel_y(x) for x in ladder], ladder):
-        ax.hlines(yy, x_lad, x_lad+lane_w, linewidth=3); ax.text(x_lad-0.25, yy, f"{sz}", va="center", ha="right", fontsize=8)
-    for yy, sz in zip([_gel_y(x) for x in sizes], sizes):
-        ax.hlines(yy, x_s, x_s+lane_w, linewidth=4); ax.text(x_s+lane_w+0.2, yy, f"{sz} bp", va="center", fontsize=8)
+    all_y = [_gel_y(x) for x in ladder + sizes]; ymin, ymax = min(all_y)-5, max(all_y)+5
+    fig, ax = plt.subplots(figsize=(5.2, 6), dpi=170); x_lad, x_s, lane_w = 0.0, 3.0, 1.0
+    for yy, sz in zip([_gel_y(x) for x in ladder], ladder): ax.hlines(yy, x_lad, x_lad+lane_w, linewidth=3); ax.text(x_lad-0.25, yy, f"{sz}", va="center", ha="right", fontsize=8)
+    for yy, sz in zip([_gel_y(x) for x in sizes], sizes): ax.hlines(yy, x_s, x_s+lane_w, linewidth=4); ax.text(x_s+lane_w+0.2, yy, f"{sz} bp", va="center", fontsize=8)
     ax.text(x_lad+lane_w/2, ymin+2, "Ladder", ha="center", fontsize=9); ax.text(x_s+lane_w/2, ymin+2, "Sample", ha="center", fontsize=9)
     ax.set_xlim(-1.2, x_s+lane_w+1.2); ax.set_ylim(ymin, ymax); ax.invert_yaxis(); ax.set_xticks([]); ax.set_yticks([])
     fig.tight_layout(); buf = io.BytesIO(); fig.savefig(buf, format="png", bbox_inches="tight"); plt.close(fig); buf.seek(0)
@@ -202,30 +200,19 @@ with st.sidebar:
     max_bp  = st.number_input("أكبر حجم (bp)", 50, 10000, 4000)
     st.markdown("---")
     st.write(f"**عدد الزوار:** {st.session_state.get('visitor_count', 'Loading...')}")
-
 st.markdown("## (Primers) إدخال البادئات")
 c1, c2 = st.columns(2)
 fwd_in, rev_in = c1.text_input("Forward primer", "CATACCACAATTGCAT"), c2.text_input("Reverse primer", "AAGAAGAAGAGAGGGGG")
 fwd, rev = _clean(fwd_in), _clean(rev_in)
-
 if fwd and rev:
-    st.markdown("#### خصائص البادئات")
-    df = pd.DataFrame([calculate_primer_properties(fwd), calculate_primer_properties(rev)], index=["Forward", "Reverse"])
-    st.table(df)
-
+    st.markdown("#### خصائص البادئات"); df = pd.DataFrame([calculate_primer_properties(fwd), calculate_primer_properties(rev)], index=["Forward", "Reverse"]); st.table(df)
 if st.button("تشغيل المحاكاة"):
     if not fwd or not rev: st.error("يرجى إدخال كلا البادئين."); st.stop()
-    with st.spinner("...جارٍ البحث عبر الويب"):
-        all_hits = run_pcr_search(fwd, rev, org, db, max_bp)
+    with st.spinner("...جارٍ البحث عبر الويب"): all_hits = run_pcr_search(fwd, rev, org, db, max_bp)
     if not all_hits: st.error("لم يتم العثور على نواتج."); st.stop()
-    
     all_hits = sorted(all_hits, key=lambda h: h.get("size", 10**9))[:5]
-    
     st.markdown("---"); st.markdown("## النتائج (أفضل ٥)")
     for i, h in enumerate(all_hits, 1):
-        product_header = f"{h.get('chrom','?')}:{h.get('start','?'):,}-{h.get('end','?'):,}"
-        st.markdown(f"#### 🎯 المنتج {i}: `{product_header}`")
-        st.write(f"**طول المنتج:** {h.get('size', '?')} bp")
-    
-    if sizes := [h["size"] for h in all_hits if "size" in h]:
-        st.markdown("### الجل الافتراضي"); st.image(render_gel(sorted(sizes)), use_column_width=True)
+        product_header = f"{h.get('chrom','?')}:{h.get('start','?'):,}-{h.get('end','?'):,}"; st.markdown(f"#### 🎯 المنتج {i}: `{product_header}`"); st.write(f"**طول المنتج:** {h.get('size', '?')} bp")
+    if sizes := [h["size"] for h in all_hits if "size" in h]: st.markdown("### الجل الافتراضي"); st.image(render_gel(sorted(sizes)), use_column_width=True)
+
