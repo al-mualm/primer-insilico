@@ -1,6 +1,7 @@
 streamlit
+pandas
+biopython
+matplotlib
 requests
 beautifulsoup4
-lxml
-matplotlib
-
+firebase-admin
