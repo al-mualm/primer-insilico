@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# FINAL VERSION v3.2 - Bulletproof Firebase Initialization & Error Handling
+# FINAL VERSION v3.3 - Maximum Resilience and Clarity
 
 import io
 import re
@@ -28,38 +28,28 @@ html, body, [class*="css"] { direction: rtl; font-family: "Noto Naskh Arabic","T
 .header h1 { margin:0 0 6px 0; font-size:1.6rem; }
 .intro-box { background-color: #f8f9fa; border-radius: 10px; padding: 15px; margin-bottom: 15px; border: 1px solid #dee2e6; }
 .small { font-size:.9rem; color:#475569;}
+.visitor-count { font-size: 0.9rem; color: #64748b; text-align: left; padding-left: 5px; }
 .badges span { display:inline-block; margin:4px 6px 0 0; padding:6px 10px; border-radius:999px; border:1px solid #e3e8ef; background:#fff; font-size:.9rem; }
 code { direction: ltr; text-align: left; display: block; white-space: pre; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- Firebase Firestore Initialization with Advanced Error Handling ---
+# --- Firebase Firestore Initialization (Cached & Robust) ---
 @st.cache_resource
 def init_firebase_connection():
-    """
-    Initializes a persistent Firebase connection.
-    This is cached to prevent re-initializing on every script rerun.
-    """
     try:
         firebase_creds = dict(st.secrets["firebase"])
         cred = credentials.Certificate(firebase_creds)
         firebase_admin.initialize_app(cred)
         return firestore.client()
-    except Exception as e:
-        # This will catch errors in the secrets format
-        st.error(f"Firebase configuration error in secrets: {e}")
+    except Exception:
+        # Silently fail but log to console if possible
+        print("Could not initialize Firebase. Check secrets.")
         return None
 
-def get_visitor_count(db):
-    """
-    Gets and increments the visitor count.
-    Now includes specific handling for the NotFound error.
-    """
-    if db is None:
-        return "تهيئة خاطئة"  # "Configuration Error"
-    
-    doc_ref = db.collection('app_stats').document('visitors')
-    
+def get_visitor_count(_db):
+    if _db is None: return "غير متاح" # "Unavailable"
+    doc_ref = _db.collection('app_stats').document('visitors')
     try:
         doc = doc_ref.get()
         if doc.exists:
@@ -67,31 +57,32 @@ def get_visitor_count(db):
             doc_ref.set({'count': new_count})
             return new_count
         else:
-            # First visitor, create the document
-            doc_ref.set({'count': 1})
-            return 1
+            doc_ref.set({'count': 1}); return 1
     except NotFound:
-        # --- THIS IS THE CRITICAL ERROR HANDLING ---
-        st.error("خطأ في الاتصال بقاعدة البيانات (NotFound): هل قمت بإنشاء قاعدة بيانات Firestore داخل مشروع Firebase الخاص بك؟ هذه خطوة مطلوبة لمرة واحدة.")
-        # English: "Database Connection Error (NotFound): Have you created the Firestore database inside your Firebase project? This is a required one-time step."
-        return "قاعدة بيانات غير موجودة" # "Database Not Found"
-    except Exception as e:
-        st.error(f"An unexpected error occurred with Firestore: {e}")
+        st.warning("تم تهيئة Firebase بنجاح، ولكن لم يتم العثور على قاعدة بيانات Firestore. يرجى إنشائها.", icon="🔥")
+        # English: "Firebase initialized, but Firestore database not found. Please create it."
+        return "يحتاج إعداد" # "Needs Setup"
+    except Exception:
         return "خطأ" # "Error"
 
-# Initialize connection and get count
 db_connection = init_firebase_connection()
 if 'visitor_count' not in st.session_state:
     st.session_state.visitor_count = get_visitor_count(db_connection)
 
-# --- The rest of your app code remains the same ---
 # --- Main Header ---
-st.markdown("""
+st.markdown(f"""
 <div class="header">
-  <h1>محاكاة PCR — بحث سريع عبر الويب + جيل افتراضي</h1>
-  <div class="small">
-    صُمِّم بواسطة <b>Mahmood Al-Mualm</b> — <b>محمود أحمد محي المعلّم</b> ·
-    البريد: <a href="mailto:mahmoodalmoalm@gmail.com">mahmoodalmoalm@gmail.com</a>
+  <div style="display: flex; justify-content: space-between; align-items: start;">
+    <div>
+      <h1>محاكاة PCR — بحث سريع عبر الويب + جيل افتراضي</h1>
+      <div class="small">
+        صُمِّم بواسطة <b>Mahmood Al-Mualm</b> — <b>محمود أحمد محي المعلّم</b> ·
+        البريد: <a href="mailto:mahmoodalmoalm@gmail.com">mahmoodalmoalm@gmail.com</a>
+      </div>
+    </div>
+    <div class="visitor-count">
+      الزوار: {st.session_state.get('visitor_count', '...')}<br/>
+    </div>
   </div>
   <div class="badges"><span>Web In-silico PCR</span><span>In-silico Gel</span><span>واجهة عربية</span></div>
 </div>
@@ -104,16 +95,16 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# ---------------- UCSC config & Session ----------------
+# ---------------- Core Application Logic ----------------
 UCSC_JSON = "https://api.genome.ucsc.edu/hgPcr"
-UCSC_HTML = ["https://genome.ucsc.edu/cgi-bin/hgPcr", "https://genome-euro.ucsc.edu/cgi-bin/hgPcr", "https://genome-asia.ucsc.edu/cgi-bin/hgPcr"]
-UCSC_GENOMES = {"Human (hg38)": ("Human", "hg38"), "Human (hg19)": ("Human", "hg19"), "Mouse (mm39)": ("Mouse", "mm39"), "Rat (rn7)": ("Rat", "rn7")}
+UCSC_HTML = ["https://genome.ucsc.edu/cgi-bin/hgPcr", "https://genome-euro.ucsc.edu/cgi-bin/hgPcr"]
+UCSC_GENOMES = {"Human (hg38)": ("Human", "hg38"), "Human (hg19)": ("Human", "hg19"), "Mouse (mm39)": ("Mouse", "mm39")}
 API_KEY = st.secrets.get("scrapingbee", {}).get("api_key")
 http_session = requests.Session()
 
-# ---------------- Helper Functions ----------------
 def _clean(seq: str) -> str: return re.sub(r"[^ACGTNacgtn]", "", (seq or "")).upper()
-@st.cache_data(ttl=24*60*60, show_spinner=False)
+
+@st.cache_data(ttl=6*60*60, show_spinner=False) # Cache for 6 hours
 def _http_get_cached(url: str, params: Dict, timeout: int) -> requests.Response:
     if not API_KEY: st.error("ScrapingBee API Key not found in secrets."); st.stop()
     proxy_url = 'https://app.scrapingbee.com/api/v1/'
@@ -127,32 +118,28 @@ def calculate_primer_properties(primer_sequence: str) -> Dict:
     return {"Length": len(primer_sequence), "GC%": round(gc_fraction(primer_sequence) * 100, 2), "Tm (°C)": round(mt.Tm_NN(primer_sequence), 2)}
 def run_pcr_search(fwd: str, rev: str, org: str, db: str, max_bp: int) -> List[Dict]:
     all_hits = []
-    try: all_hits.extend(ucsc_via_json(fwd, rev, org, db, max_bp) or [])
-    except Exception: pass
+    try:
+        params = dict(org=org, db=db, wp_f=fwd, wp_r=rev, wp_size=int(max_bp))
+        r = _http_get_cached(UCSC_JSON, params, 60)
+        data = r.json()
+        for key in ("results","pcr","items","products"):
+            if key in data and isinstance(data[key], list):
+                for item in data[key]:
+                    if prod := _coerce_item(item): all_hits.append(prod)
+    except Exception as e:
+        st.warning(f"واجهة API لم تنجح، جاري تجربة المرايا... ({e})", icon="🌐")
+        # English: "API failed, trying mirrors..."
     if not all_hits:
-        try: all_hits.extend(ucsc_via_html(fwd, rev, org, db, max_bp) or [])
-        except Exception as e: st.error(f"Failed to fetch data from all sources: {e}")
-    return all_hits
-def ucsc_via_json(fwd, rev, org, db, max_bp):
-    params = dict(org=org, db=db, wp_f=fwd, wp_r=rev, wp_size=int(max_bp))
-    r = _http_get_cached(UCSC_JSON, params, 45); data = r.json(); products = []
-    for key in ("results","pcr","items","products"):
-        if key in data and isinstance(data[key], list):
-            for item in data[key]:
-                if prod := _coerce_item(item): products.append(prod)
-    return products
-def ucsc_via_html(fwd, rev, org, db, max_bp):
-    last_err = None
-    for url in UCSC_HTML:
         try:
             params = {"org": org, "db": db, "wp_f": fwd, "wp_r": rev, "wp_size": int(max_bp), "Submit": "submit"}
-            r = _http_get_cached(url, params, 45); txt = r.text
-            if "cloudflare" in txt.lower(): last_err = RuntimeError("Request blocked by Cloudflare."); time.sleep(1); continue
-            soup = BeautifulSoup(txt, "lxml"); pre_txt = "\n".join(p.get_text("\n") for p in soup.find_all("pre")) or txt
-            if products := (parse_fasta_products(pre_txt) or parse_html_products(pre_txt)): return products
-        except Exception as e: last_err = e; time.sleep(1)
-    if last_err: raise last_err
-    return []
+            r = _http_get_cached(UCSC_HTML[0], params, 60) # Try first mirror
+            soup = BeautifulSoup(r.text, "lxml")
+            pre_txt = "\n".join(p.get_text("\n") for p in soup.find_all("pre")) or r.text
+            all_hits.extend(parse_fasta_products(pre_txt) or parse_html_products(pre_txt))
+        except Exception as e:
+            st.error(f"فشل جلب البيانات من كل المصادر. قد يكون الخادم الخارجي محظورًا مؤقتًا. ({e})")
+            # English: "Failed to fetch data from all sources. The external server may be temporarily blocked."
+    return all_hits
 def _coerce_item(item):
     if isinstance(item, list) and item and isinstance(item[0], dict): item = item[0]
     if not isinstance(item, dict): return {}
@@ -198,8 +185,6 @@ with st.sidebar:
     genome_label = st.selectbox("المرجع", list(UCSC_GENOMES.keys()), index=0)
     org, db = UCSC_GENOMES[genome_label]
     max_bp  = st.number_input("أكبر حجم (bp)", 50, 10000, 4000)
-    st.markdown("---")
-    st.write(f"**عدد الزوار:** {st.session_state.get('visitor_count', 'Loading...')}")
 st.markdown("## (Primers) إدخال البادئات")
 c1, c2 = st.columns(2)
 fwd_in, rev_in = c1.text_input("Forward primer", "CATACCACAATTGCAT"), c2.text_input("Reverse primer", "AAGAAGAAGAGAGGGGG")
