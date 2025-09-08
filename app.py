@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# FINAL VERSION v4.1 - Corrected Syntax Error
+# FINAL VERSION v4.2 - Corrected HTML Parser
 
 import io
 import re
@@ -58,7 +58,6 @@ http_session = requests.Session()
 
 def _clean(seq: str) -> str: return re.sub(r"[^ACGTNacgtn]", "", (seq or "")).upper()
 
-# --- THIS IS THE CORRECTED LINE ---
 @st.cache_data(ttl=6*60*60, show_spinner=True)
 def _http_get_cached(url: str, params: Dict, timeout: int) -> requests.Response:
     if not API_KEY: st.error("ScrapingBee API Key not found in secrets."); st.stop()
@@ -89,7 +88,8 @@ def run_pcr_search(fwd: str, rev: str, org: str, db: str, max_bp: int) -> List[D
         try:
             params = {"org": org, "db": db, "wp_f": fwd, "wp_r": rev, "wp_size": int(max_bp), "Submit": "submit"}
             r = _http_get_cached(UCSC_HTML[0], params, 60)
-            soup = BeautifulSoup(r.text, "lxml")
+            # --- THIS IS THE CORRECTED LINE ---
+            soup = BeautifulSoup(r.text, "html.parser")
             pre_txt = "\n".join(p.get_text("\n") for p in soup.find_all("pre")) or r.text
             all_hits.extend(parse_fasta_products(pre_txt) or parse_html_products(pre_txt))
         except Exception as e:
