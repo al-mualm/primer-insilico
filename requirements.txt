@@ -4,4 +4,3 @@ biopython
 matplotlib
 requests
 beautifulsoup4
-firebase-admin
