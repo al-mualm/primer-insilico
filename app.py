@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# FINAL VERSION v4.2 - Corrected HTML Parser
+# FINAL VERSION v4.3 - Increased Timeout
 
 import io
 import re
@@ -74,9 +74,11 @@ def calculate_primer_properties(primer_sequence: str) -> Dict:
 
 def run_pcr_search(fwd: str, rev: str, org: str, db: str, max_bp: int) -> List[Dict]:
     all_hits = []
+    # --- THIS IS THE CORRECTED PART: Timeout increased to 120 seconds ---
+    timeout_seconds = 120
     try:
         params = dict(org=org, db=db, wp_f=fwd, wp_r=rev, wp_size=int(max_bp))
-        r = _http_get_cached(UCSC_JSON, params, 60)
+        r = _http_get_cached(UCSC_JSON, params, timeout_seconds)
         data = r.json()
         for key in ("results","pcr","items","products"):
             if key in data and isinstance(data[key], list):
@@ -87,8 +89,7 @@ def run_pcr_search(fwd: str, rev: str, org: str, db: str, max_bp: int) -> List[D
     if not all_hits:
         try:
             params = {"org": org, "db": db, "wp_f": fwd, "wp_r": rev, "wp_size": int(max_bp), "Submit": "submit"}
-            r = _http_get_cached(UCSC_HTML[0], params, 60)
-            # --- THIS IS THE CORRECTED LINE ---
+            r = _http_get_cached(UCSC_HTML[0], params, timeout_seconds)
             soup = BeautifulSoup(r.text, "html.parser")
             pre_txt = "\n".join(p.get_text("\n") for p in soup.find_all("pre")) or r.text
             all_hits.extend(parse_fasta_products(pre_txt) or parse_html_products(pre_txt))
